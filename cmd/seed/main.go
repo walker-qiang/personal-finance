@@ -74,7 +74,7 @@ func main() {
 
 	var assetCount, snapCount int
 	for _, a := range sf.Assets {
-		if err := st.UpsertAsset(ctx, store.Asset{
+		assetID, err := st.UpsertAsset(ctx, store.Asset{
 			Code:             a.Code,
 			Name:             a.Name,
 			AssetType:        a.AssetType,
@@ -85,18 +85,15 @@ func main() {
 			HoldingCostPct:   nullFloatPtr(a.HoldingCostPct),
 			ExpectedYieldPct: nullFloatPtr(a.ExpectedYieldPct),
 			Notes:            a.Notes,
-		}); err != nil {
+		})
+		if err != nil {
 			log.Fatalf("upsert asset %q: %v", a.Code, err)
 		}
 		assetCount++
 
 		date := coalesce(a.SnapshotDate, sf.SnapshotDate)
-		assetID, err := st.GetAssetIDByCode(ctx, a.Code)
-		if err != nil {
-			log.Fatalf("lookup asset %q after upsert: %v", a.Code, err)
-		}
 		balanceCents := int64(math.Round(a.BalanceYuan * 100))
-		if err := st.UpsertSnapshot(ctx, store.Snapshot{
+		if _, err := st.UpsertSnapshot(ctx, store.Snapshot{
 			AssetID:          assetID,
 			SnapshotDate:     date,
 			BalanceCents:     balanceCents,

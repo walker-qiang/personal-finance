@@ -4,7 +4,7 @@
 >
 > **Lifetime**: 5–10 years. **Repo posture**: permanent private (decision #33 in `obsidian-wiki/_system/SYSTEM-DESIGN.md`).
 >
-> Status (2026-04-20): **M1** — bootstrap, first migration, publish job framework. Manual-trigger publish, no auto-dump after every write.
+> Status (2026-04-20): **M1.5** — full mutation API (POST/PATCH/DELETE for assets, snapshots, transactions) on top of the M1 publish framework. Still manual-trigger publish (no auto-dump after every write).
 
 ---
 
@@ -96,16 +96,56 @@ curl -X POST http://localhost:7001/api/finance/publish | jq
 
 ---
 
-## 4. Endpoints (M1)
+## 4. Endpoints (M1.5)
+
+All paths are under `http://localhost:7001`. JSON in / JSON out.
+
+### Reads
+
+| Method | Path | Query params | Purpose |
+|---|---|---|---|
+| `GET` | `/healthz` | — | liveness |
+| `GET` | `/api/finance/assets` | `bucket`, `asset_type`, `include_archived=1` | list assets (default = non-archived only) |
+| `GET` | `/api/finance/assets/:id` | — | one asset |
+| `GET` | `/api/finance/snapshots` | `asset_id`, `since=YYYY-MM-DD`, `until=YYYY-MM-DD` | list snapshots |
+| `GET` | `/api/finance/snapshots/:id` | — | one snapshot |
+| `GET` | `/api/finance/transactions` | `asset_id`, `direction`, `since`, `until` | list transactions |
+| `GET` | `/api/finance/transactions/:id` | — | one transaction |
+| `GET` | `/api/finance/holdings` | — | latest snapshot per asset (= holdings VIEW) |
+
+### Mutations
+
+| Method | Path | Body shape | Idempotency |
+|---|---|---|---|
+| `POST` | `/api/finance/assets` | `{code,name,asset_type,bucket,channel?,currency?,risk_level?,holding_cost_pct?,expected_yield_pct?,notes?}` | UPSERT by `code` (revives archived rows) |
+| `PATCH` | `/api/finance/assets/:id` | any subset of the above + `clear_holding_cost_pct`, `clear_expected_yield_pct` | partial update |
+| `DELETE` | `/api/finance/assets/:id` | — | soft delete (sets `archived_at`) |
+| `POST` | `/api/finance/snapshots` | `{asset_id\|asset_code, snapshot_date, balance_yuan\|balance_cents, expected_yield_pct?, actual_yield_pct?, notes?}` | UPSERT by `(asset_id, snapshot_date)` |
+| `PATCH` | `/api/finance/snapshots/:id` | subset of above + `clear_*_yield_pct` | partial update; `(asset_id, snapshot_date)` is immutable — delete + repost to move |
+| `DELETE` | `/api/finance/snapshots/:id` | — | hard delete |
+| `POST` | `/api/finance/transactions` | `{asset_id\|asset_code, txn_date, direction, amount_yuan\|amount_cents, fee_yuan?\|fee_cents?, notes?}` | always inserts (no natural key) → `201 Created` |
+| `PATCH` | `/api/finance/transactions/:id` | subset (any field except `asset_id`) | partial update |
+| `DELETE` | `/api/finance/transactions/:id` | — | hard delete |
+
+### Publish
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/healthz` | liveness |
-| `GET` | `/api/finance/assets` | list assets |
-| `GET` | `/api/finance/snapshots?asset_id=&from=&to=` | list snapshots |
-| `POST` | `/api/finance/publish` | run publish job synchronously, return `{commit, files, pushed}` |
+| `POST` | `/api/finance/publish` | run publish job synchronously, return `{ok,commit_sha,files_written,pushed,message}` |
 
-M2 will add: POST endpoints to mutate snapshots/transactions, transaction list, holdings view, web UI.
+### Money input
+
+Mutation endpoints that accept money take **either** `*_cents` (lossless `int64`, preferred for programmatic clients) **or** `*_yuan` (`float64`, convenient for curl). Sending both → `400 ErrMoneyConflict`. Sending neither (when required) → `400 ErrMoneyMissing`. Internally stored as cents; responses include both.
+
+### Status codes
+
+- `200 OK` — successful read / update / upsert / soft-delete / hard-delete
+- `201 Created` — `POST /api/finance/transactions` only (true insert)
+- `400 Bad Request` — validation failed (enum out of range, bad date, negative cents, missing required field, both yuan+cents)
+- `404 Not Found` — `:id` does not exist
+- `500 Internal Server Error` — DB error or publish-job failure
+
+M2 follow-ups: `make import-from-exports` (DR rebuild), switch app to `sqlc` generated code, kick off `personal-web` (P2-24) consuming this API.
 
 ---
 
