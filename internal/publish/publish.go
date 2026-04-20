@@ -17,17 +17,15 @@ package publish
 
 import (
 	"context"
-	"database/sql"
-	"encoding/csv"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/walker-qiang/personal-finance/internal/config"
+	"github.com/walker-qiang/personal-finance/internal/csvexport"
 	"github.com/walker-qiang/personal-finance/internal/db/store"
 )
 
@@ -261,6 +259,11 @@ func (j *Job) logFailure(r Result) {
 }
 
 // --- table dumpers ---
+//
+// CSV writer logic lives in internal/csvexport so that cmd/import's
+// round-trip verifier can reuse the exact same code path. Any byte-level
+// drift between publisher and verifier would silently break the DR
+// guarantee, so the only allowed location for that code is csvexport.
 
 func (j *Job) dumpAll(ctx context.Context, dir, stamp string) ([]string, error) {
 	files := []string{
@@ -269,164 +272,17 @@ func (j *Job) dumpAll(ctx context.Context, dir, stamp string) ([]string, error) 
 		filepath.Join(dir, "transactions-"+stamp+".csv"),
 		filepath.Join(dir, "holdings-"+stamp+".csv"),
 	}
-	if err := j.dumpAssets(ctx, files[0]); err != nil {
+	if err := csvexport.DumpAssets(ctx, j.store, files[0]); err != nil {
 		return files, fmt.Errorf("assets: %w", err)
 	}
-	if err := j.dumpSnapshots(ctx, files[1]); err != nil {
+	if err := csvexport.DumpSnapshots(ctx, j.store, files[1]); err != nil {
 		return files, fmt.Errorf("snapshots: %w", err)
 	}
-	if err := j.dumpTransactions(ctx, files[2]); err != nil {
+	if err := csvexport.DumpTransactions(ctx, j.store, files[2]); err != nil {
 		return files, fmt.Errorf("transactions: %w", err)
 	}
-	if err := j.dumpHoldings(ctx, files[3]); err != nil {
+	if err := csvexport.DumpHoldings(ctx, j.store, files[3]); err != nil {
 		return files, fmt.Errorf("holdings: %w", err)
 	}
 	return files, nil
-}
-
-func (j *Job) dumpAssets(ctx context.Context, path string) error {
-	rows, err := j.store.ListAssets(ctx)
-	if err != nil {
-		return err
-	}
-	return writeCSV(path,
-		[]string{"code", "name", "asset_type", "bucket", "channel", "currency", "risk_level", "holding_cost_pct", "expected_yield_pct", "notes", "created_at"},
-		func(w *csv.Writer) error {
-			for _, r := range rows {
-				if err := w.Write([]string{
-					r.Code, r.Name, r.AssetType, r.Bucket, r.Channel, r.Currency,
-					nullStr(r.RiskLevel), nullFloat(r.HoldingCostPct), nullFloat(r.ExpectedYieldPct),
-					r.Notes, r.CreatedAt,
-				}); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-}
-
-func (j *Job) dumpSnapshots(ctx context.Context, path string) error {
-	rows, err := j.store.ListSnapshots(ctx)
-	if err != nil {
-		return err
-	}
-	return writeCSV(path,
-		[]string{"asset_code", "asset_name", "snapshot_date", "balance_yuan", "balance_cents", "expected_yield_pct", "actual_yield_pct", "notes", "created_at"},
-		func(w *csv.Writer) error {
-			for _, r := range rows {
-				if err := w.Write([]string{
-					r.AssetCode, r.AssetName, r.SnapshotDate,
-					yuan(r.BalanceCents), strconv.FormatInt(r.BalanceCents, 10),
-					nullFloat(r.ExpectedYieldPct), nullFloat(r.ActualYieldPct),
-					r.Notes, r.CreatedAt,
-				}); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-}
-
-func (j *Job) dumpTransactions(ctx context.Context, path string) error {
-	rows, err := j.store.ListTransactions(ctx)
-	if err != nil {
-		return err
-	}
-	return writeCSV(path,
-		[]string{"asset_code", "asset_name", "txn_date", "direction", "amount_yuan", "amount_cents", "fee_yuan", "fee_cents", "notes", "created_at"},
-		func(w *csv.Writer) error {
-			for _, r := range rows {
-				if err := w.Write([]string{
-					r.AssetCode, r.AssetName, r.TxnDate, r.Direction,
-					yuan(r.AmountCents), strconv.FormatInt(r.AmountCents, 10),
-					yuan(r.FeeCents), strconv.FormatInt(r.FeeCents, 10),
-					r.Notes, r.CreatedAt,
-				}); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-}
-
-func (j *Job) dumpHoldings(ctx context.Context, path string) error {
-	rows, err := j.store.ListHoldings(ctx)
-	if err != nil {
-		return err
-	}
-	return writeCSV(path,
-		[]string{"asset_code", "asset_name", "asset_type", "bucket", "channel", "currency", "risk_level", "as_of", "balance_yuan", "balance_cents", "expected_yield_pct"},
-		func(w *csv.Writer) error {
-			for _, r := range rows {
-				balYuan := ""
-				balCents := ""
-				if r.BalanceCents.Valid {
-					balYuan = yuan(r.BalanceCents.Int64)
-					balCents = strconv.FormatInt(r.BalanceCents.Int64, 10)
-				}
-				if err := w.Write([]string{
-					r.AssetCode, r.AssetName, r.AssetType, r.Bucket, r.Channel, r.Currency,
-					nullStr(r.RiskLevel), nullStr(r.AsOf),
-					balYuan, balCents, nullFloat(r.ExpectedYieldPct),
-				}); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-}
-
-// --- helpers ---
-
-func writeCSV(path string, header []string, body func(w *csv.Writer) error) error {
-	tmp := path + ".tmp"
-	f, err := os.Create(tmp)
-	if err != nil {
-		return err
-	}
-	w := csv.NewWriter(f)
-	if err := w.Write(header); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := body(w); err != nil {
-		_ = f.Close()
-		return err
-	}
-	w.Flush()
-	if err := w.Error(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
-func yuan(cents int64) string {
-	sign := ""
-	if cents < 0 {
-		sign = "-"
-		cents = -cents
-	}
-	return fmt.Sprintf("%s%d.%02d", sign, cents/100, cents%100)
-}
-
-func nullStr(v sql.NullString) string {
-	if !v.Valid {
-		return ""
-	}
-	return v.String
-}
-
-func nullFloat(v sql.NullFloat64) string {
-	if !v.Valid {
-		return ""
-	}
-	return strconv.FormatFloat(v.Float64, 'f', -1, 64)
 }

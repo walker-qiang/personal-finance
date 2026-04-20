@@ -12,7 +12,7 @@ PUBLISH_WORKTREE ?= $(HOME)/obsidian-wiki-publish-worktree
 export FINANCE_DB_PATH=$(DB_PATH)
 export PUBLISH_WORKTREE
 
-.PHONY: tools migrate migrate-status migrate-down sqlc seed run build publish-dry test fmt vet clean help
+.PHONY: tools migrate migrate-status migrate-down sqlc seed run build publish-dry import-from-exports import-from-exports-verify test fmt vet clean help
 
 help:
 	@echo "Targets:"
@@ -25,6 +25,9 @@ help:
 	@echo "  run             run server on localhost:7001"
 	@echo "  build           compile cmd/* to ./bin"
 	@echo "  publish-dry     run publish job locally (no push, just commit)"
+	@echo "  import-from-exports         DR: rebuild $(DB_PATH) from latest CSVs in PUBLISH_WORKTREE/finance/exports/"
+	@echo "                              (refuses if DB non-empty; pass FORCE=1 to wipe)"
+	@echo "  import-from-exports-verify  same as above + round-trip parity check"
 	@echo "  test            run go test ./..."
 	@echo "  fmt vet         go fmt / go vet"
 	@echo "  clean           remove ./bin and state/finance.db (DESTRUCTIVE)"
@@ -67,6 +70,24 @@ build: $(BIN)
 
 publish-dry:
 	$(GO) run ./cmd/server -publish-once
+
+# DR: rebuild finance.db from the latest CSVs published into the
+# obsidian-wiki-publish-worktree. Refuses by default if DB has rows;
+# pass FORCE=1 to wipe and re-import. Use DATE=YYYY-MM-DD to pin.
+import-from-exports:
+	$(GO) run ./cmd/import \
+		-db   $(DB_PATH) \
+		-from $(PUBLISH_WORKTREE)/finance/exports \
+		$(if $(DATE),-date $(DATE),) \
+		$(if $(FORCE),-force,)
+
+import-from-exports-verify:
+	$(GO) run ./cmd/import \
+		-db   $(DB_PATH) \
+		-from $(PUBLISH_WORKTREE)/finance/exports \
+		$(if $(DATE),-date $(DATE),) \
+		$(if $(FORCE),-force,) \
+		-verify
 
 test:
 	$(GO) test ./...

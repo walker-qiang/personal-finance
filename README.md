@@ -192,8 +192,29 @@ Hook bypass (e.g. for emergency change of whitelist scope) requires `ALLOW_PUBLI
 
 ## 8. Disaster recovery
 
-- `state/finance.db` lost? → run `make import-from-exports` (M2) to rebuild from `obsidian-wiki/finance/exports/*.csv`.
-- This repo lost? → re-clone from origin; this repo has no SoT data, only code.
+`state/finance.db` lives only on this machine and is gitignored; the published CSVs in `obsidian-wiki/finance/exports/` are the only off-machine copy. The `import-from-exports` command is the inverse of publish.
+
+```bash
+# fresh DB (file missing): auto-runs migrations + imports the latest dated CSVs
+make import-from-exports
+
+# DB exists but has data: refused by default — pass FORCE=1 to wipe + replace
+make import-from-exports FORCE=1
+
+# pin a specific date (default = newest YYYY-MM-DD found in the source dir)
+make import-from-exports DATE=2026-04-15
+
+# round-trip parity check: import, then re-dump CSVs to a temp dir and SHA-256
+# compare to the source files. Any drift = the export format silently changed
+# and DR would have been lossy.
+make import-from-exports-verify FORCE=1
+```
+
+Round-trip property: `import → publish → byte-identical CSVs`. The single source of truth for the CSV format is `internal/csvexport/`, used by both publish and the verifier — so you can't change one without breaking the other (they share code, not schema).
+
+Lossy edge case (documented, not fixed): if you `DELETE /api/finance/assets/:id` (soft-archive) **without** first deleting that asset's snapshots, the snapshots CSV will contain rows whose `asset_code` is no longer in the assets CSV, and `import-from-exports` will fail. Workflow: delete snapshots first, then archive — or accept that DR will lose archived assets' historical snapshots. (Future fix: include `archived_at` column in assets CSV and dump archived assets too — bumps publish format to v2.)
+
+Repo loss: this repo has no SoT data, only code → re-clone from origin (when one exists) or rebuild from this README.
 
 ---
 
