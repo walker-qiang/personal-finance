@@ -1,0 +1,32 @@
+# --- runtime state (never commit) ---
+state/*.db
+state/*.db-shm
+state/*.db-wal
+state/finance.db*
+
+# --- secrets (契约 11) ---
+*.env
+.env
+.env.*
+secrets/
+
+# --- build output ---
+bin/
+dist/
+*.test
+*.out
+coverage.txt
+
+# --- editor / OS ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- logs ---
+*.log
+logs/
+
+# --- Go ---
+vendor/
