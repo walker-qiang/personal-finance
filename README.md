@@ -145,7 +145,7 @@ Mutation endpoints that accept money take **either** `*_cents` (lossless `int64`
 - `404 Not Found` — `:id` does not exist
 - `500 Internal Server Error` — DB error or publish-job failure
 
-M2 follow-ups: `make import-from-exports` (DR rebuild), switch app to `sqlc` generated code, kick off `personal-web` (P2-24) consuming this API.
+M2 follow-ups: ~~`make import-from-exports` (DR rebuild)~~ done in M1.6, ~~switch app to `sqlc` generated code~~ done in M1.6 (hybrid: static SQL via sqlc, dynamic SQL hand-rolled — see `internal/db/store/store.go` package comment for the split rationale). Next: kick off `personal-web` (P2-24) consuming this API.
 
 ---
 

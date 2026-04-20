@@ -38,13 +38,11 @@ $(BIN):
 tools: $(BIN)
 	GOBIN=$(BIN) $(GO) install github.com/pressly/goose/v3/cmd/goose@v3.22.1
 	@echo
-	@echo "Note: sqlc is intentionally NOT auto-installed in M1."
-	@echo "      M1 uses hand-rolled queries in internal/db/store/. The sqlc.yaml"
-	@echo "      and queries/*.sql are committed so M2+ can switch to generated"
-	@echo "      code. Install sqlc manually with:"
-	@echo "        GOBIN=\$$PWD/bin go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.27.0"
-	@echo "      (warning: sqlc pulls pg_query_go which requires cgo; on macOS 15"
-	@echo "       you may hit a strchrnul build error — pin a newer sqlc or use brew)."
+	@echo "Note: sqlc is required from M1.6+ (static SQL paths in store.go are"
+	@echo "      delegated to internal/db/sqlc/). Install via Homebrew:"
+	@echo "        brew install sqlc"
+	@echo "      (the @go install path pulls pg_query_go which fails on cgo;"
+	@echo "       brew bottle is the maintained option)."
 
 migrate:
 	$(GOOSE) -dir $(MIGRATIONS_DIR) sqlite3 $(DB_PATH) up
