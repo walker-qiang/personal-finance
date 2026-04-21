@@ -41,6 +41,7 @@ func roundTripVerify(ctx context.Context, conn *sql.DB, sourceDir, date string) 
 		{"assets-" + date + ".csv", func(p string) error { return csvexport.DumpAssets(ctx, st, p) }},
 		{"snapshots-" + date + ".csv", func(p string) error { return csvexport.DumpSnapshots(ctx, st, p) }},
 		{"transactions-" + date + ".csv", func(p string) error { return csvexport.DumpTransactions(ctx, st, p) }},
+		{"bucket_targets-" + date + ".csv", func(p string) error { return csvexport.DumpBucketTargets(ctx, st, p) }},
 		{"holdings-" + date + ".csv", func(p string) error { return csvexport.DumpHoldings(ctx, st, p) }},
 	}
 

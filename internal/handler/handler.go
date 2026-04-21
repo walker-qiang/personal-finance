@@ -45,8 +45,14 @@ func (a *API) Register(r *gin.Engine) {
 		g.PATCH("/transactions/:id", a.patchTransaction)
 		g.DELETE("/transactions/:id", a.deleteTransaction)
 
+		// Bucket targets (target weights for the cash / stable / growth split)
+		g.GET("/bucket-targets", a.listBucketTargets)
+		g.PUT("/bucket-targets", a.upsertBucketTarget)
+		g.DELETE("/bucket-targets/:bucket", a.deleteBucketTarget)
+
 		// Publish
 		g.POST("/publish", a.runPublish)
+		g.GET("/publish/last", a.lastPublish)
 	}
 }
 
@@ -747,6 +753,97 @@ func (a *API) listHoldings(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"holdings": out, "count": len(out)})
 }
 
+// ---------- bucket-targets ----------
+
+// listBucketTargets always returns 3 entries (cash / stable / growth) so the
+// UI can render an empty-state row without doing a "missing bucket" check.
+// Buckets with no row in the DB come back with target_pct=null, is_set=false.
+func (a *API) listBucketTargets(c *gin.Context) {
+	rows, err := a.Store.ListBucketTargets(c.Request.Context())
+	if err != nil {
+		internalErr(c, err)
+		return
+	}
+	have := map[string]BucketTargetResp{}
+	for _, r := range rows {
+		have[r.Bucket] = toBucketTargetResp(r)
+	}
+	out := make([]BucketTargetResp, 0, 3)
+	for _, b := range []string{"cash", "stable", "growth"} {
+		if r, ok := have[b]; ok {
+			out = append(out, r)
+		} else {
+			out = append(out, BucketTargetResp{Bucket: b, IsSet: false})
+		}
+	}
+
+	// Compute sum across set targets so the UI can warn when the user has
+	// over- or under-allocated. nil in the response means "no targets set
+	// yet at all" (different from sum=0 which would be "all 3 set to 0").
+	var sumPct *float64
+	if len(rows) > 0 {
+		var s float64
+		for _, r := range rows {
+			s += r.TargetPct
+		}
+		sumPct = &s
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"bucket_targets": out,
+		"sum_pct":        sumPct,
+	})
+}
+
+type upsertBucketTargetReq struct {
+	Bucket    string  `json:"bucket"`
+	TargetPct float64 `json:"target_pct"`
+	Notes     string  `json:"notes"`
+}
+
+func (a *API) upsertBucketTarget(c *gin.Context) {
+	var req upsertBucketTargetReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		badRequest(c, err)
+		return
+	}
+	if err := validateBucket(req.Bucket); err != nil {
+		badRequest(c, err)
+		return
+	}
+	if req.TargetPct < 0 || req.TargetPct > 100 {
+		badRequest(c, errors.New("target_pct must be in [0, 100]"))
+		return
+	}
+	row, err := a.Store.UpsertBucketTarget(c.Request.Context(), store.BucketTarget{
+		Bucket:    req.Bucket,
+		TargetPct: req.TargetPct,
+		Notes:     req.Notes,
+	})
+	if err != nil {
+		internalErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"bucket_target": toBucketTargetResp(row)})
+}
+
+func (a *API) deleteBucketTarget(c *gin.Context) {
+	bucket := c.Param("bucket")
+	if err := validateBucket(bucket); err != nil {
+		badRequest(c, err)
+		return
+	}
+	if err := a.Store.DeleteBucketTarget(c.Request.Context(), bucket); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			notFound(c, "bucket_target")
+			return
+		}
+		internalErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted_bucket": bucket})
+}
+
 // ---------- publish ----------
 
 func (a *API) runPublish(c *gin.Context) {
@@ -756,4 +853,23 @@ func (a *API) runPublish(c *gin.Context) {
 		status = http.StatusInternalServerError
 	}
 	c.JSON(status, res)
+}
+
+// lastPublish reports the most recent auto-publish commit by scanning the
+// publish worktree's git log. We deliberately don't track it in a separate DB
+// table because git already is the source of truth — anything else would
+// risk drift if the worktree gets reset/rebuilt manually.
+//
+// Behaviour:
+//   - never block on the network: we use `git log` which is local-only.
+//   - if no `[auto-publish]` commit exists yet (fresh worktree), return
+//     `{"last": null}` instead of 404 so the UI renders "no publish yet".
+//   - if the worktree itself is missing/broken, return 500 with the error.
+func (a *API) lastPublish(c *gin.Context) {
+	res, err := a.Job.LastPublish(c.Request.Context())
+	if err != nil {
+		internalErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"last": res})
 }

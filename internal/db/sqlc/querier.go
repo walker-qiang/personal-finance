@@ -18,6 +18,7 @@ type Querier interface {
 	ArchiveAsset(ctx context.Context, id int64) (int64, error)
 	// Used by ArchiveAsset's "already-archived vs not-found" disambiguation.
 	AssetExistsByID(ctx context.Context, id int64) (int64, error)
+	DeleteBucketTarget(ctx context.Context, bucket string) (int64, error)
 	// Hard delete (no soft-delete on snapshots, they're cheap to recreate).
 	DeleteSnapshot(ctx context.Context, id int64) (int64, error)
 	DeleteTransaction(ctx context.Context, id int64) (int64, error)
@@ -26,6 +27,7 @@ type Querier interface {
 	// as "not found" for read paths so the UI doesn't have to filter.
 	GetAssetByID(ctx context.Context, id int64) (Asset, error)
 	GetAssetIDByCode(ctx context.Context, code string) (int64, error)
+	GetBucketTarget(ctx context.Context, bucket string) (BucketTarget, error)
 	GetSnapshotByID(ctx context.Context, id int64) (GetSnapshotByIDRow, error)
 	GetTransactionByID(ctx context.Context, id int64) (GetTransactionByIDRow, error)
 	// Append-only. Transactions have no natural unique key (an asset can buy
@@ -38,6 +40,9 @@ type Querier interface {
 	// internal/db/store/store.go (ListAssetsFiltered) because sqlc cannot generate
 	// the optional WHERE conditions.
 	ListAssets(ctx context.Context) ([]Asset, error)
+	// All target rows; we always return all 3 buckets even if some have no row
+	// (handler layer fills missing buckets with target_pct=null in the response).
+	ListBucketTargets(ctx context.Context) ([]BucketTarget, error)
 	ListHoldings(ctx context.Context) ([]Holding, error)
 	// All snapshots, joined with assets for code/name display columns. Used by
 	// both the GET API and the publish job's snapshots-*.csv dump.
@@ -52,6 +57,9 @@ type Querier interface {
 	//   - Re-creating an already-archived asset clears archived_at ("revive")
 	//   - Returns the row id (LastInsertId is unreliable for ON CONFLICT paths)
 	UpsertAssetByCode(ctx context.Context, arg UpsertAssetByCodeParams) (int64, error)
+	// Idempotent on `bucket`. Always bumps updated_at on overwrite so the audit
+	// trail / CSV export shows the last edit time.
+	UpsertBucketTarget(ctx context.Context, arg UpsertBucketTargetParams) (BucketTarget, error)
 	// Idempotent on (asset_id, snapshot_date). Returns row id so the caller can
 	// 200 + read-back without a separate SELECT.
 	UpsertSnapshot(ctx context.Context, arg UpsertSnapshotParams) (int64, error)

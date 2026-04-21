@@ -207,3 +207,28 @@ func toHoldingsResp(in []store.Holding) []HoldingResp {
 	}
 	return out
 }
+
+// BucketTargetResp is the API shape for the per-bucket target allocation.
+// All 4 fields are always present (no NULLs in the schema). The list endpoint
+// always returns 3 entries (cash / stable / growth); rows that haven't been
+// set yet come back with `target_pct: null` and `is_set: false` so the UI
+// doesn't have to second-guess "absent vs zero".
+type BucketTargetResp struct {
+	Bucket    string   `json:"bucket"`
+	TargetPct *float64 `json:"target_pct"`
+	Notes     string   `json:"notes"`
+	UpdatedAt *string  `json:"updated_at"`
+	IsSet     bool     `json:"is_set"`
+}
+
+func toBucketTargetResp(b store.BucketTarget) BucketTargetResp {
+	pct := b.TargetPct
+	updated := b.UpdatedAt
+	return BucketTargetResp{
+		Bucket:    b.Bucket,
+		TargetPct: &pct,
+		Notes:     b.Notes,
+		UpdatedAt: &updated,
+		IsSet:     true,
+	}
+}

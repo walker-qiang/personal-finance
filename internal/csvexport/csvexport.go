@@ -105,6 +105,33 @@ func DumpTransactions(ctx context.Context, st *store.Store, path string) error {
 	})
 }
 
+// BucketTargets header. Even though there are at most 3 rows, we treat this
+// as a normal export so the audit trail / DR story is consistent (every piece
+// of user-edited state ends up in git via CSV).
+var BucketTargetsHeader = []string{
+	"bucket", "target_pct", "notes", "updated_at",
+}
+
+func DumpBucketTargets(ctx context.Context, st *store.Store, path string) error {
+	rows, err := st.ListBucketTargets(ctx)
+	if err != nil {
+		return err
+	}
+	return WriteCSV(path, BucketTargetsHeader, func(w *csv.Writer) error {
+		for _, r := range rows {
+			if err := w.Write([]string{
+				r.Bucket,
+				strconv.FormatFloat(r.TargetPct, 'f', -1, 64),
+				r.Notes,
+				r.UpdatedAt,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 var HoldingsHeader = []string{
 	"asset_code", "asset_name", "asset_type", "bucket", "channel", "currency",
 	"risk_level", "as_of", "balance_yuan", "balance_cents", "expected_yield_pct",

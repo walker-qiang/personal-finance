@@ -29,6 +29,16 @@ import (
 	"github.com/walker-qiang/personal-finance/internal/db/store"
 )
 
+// LastInfo is a subset of Result reconstructed from git log. We don't have
+// FilesWritten/FilesStaged/Pushed because git log doesn't carry them — the
+// goal here is "what / when did the last publish happen" not full replay.
+type LastInfo struct {
+	CommitSHA  string `json:"commit_sha"`
+	CommittedAt string `json:"committed_at"` // ISO-8601 UTC from git
+	Subject    string `json:"subject"`
+	Branch     string `json:"branch"`
+}
+
 // Result is what the HTTP handler returns to the caller and what we log.
 type Result struct {
 	OK              bool      `json:"ok"`
@@ -168,6 +178,43 @@ func (j *Job) Run(ctx context.Context) (res Result) {
 	return res
 }
 
+// LastPublish returns the most recent `[auto-publish]` commit on the publish
+// worktree, or nil if none exists yet. Errors are reserved for "the worktree
+// is broken" — a fresh worktree with no auto-publish history is *not* an
+// error, just `(nil, nil)`.
+//
+// We grep with `--grep '\[auto-publish\]' --max-count 1` so a manually made
+// commit (e.g. someone editing during incident response) doesn't get reported
+// as the "last publish".
+func (j *Job) LastPublish(ctx context.Context) (*LastInfo, error) {
+	if err := preflight(j.cfg.PublishWorktree); err != nil {
+		return nil, err
+	}
+	out, err := gitOut(ctx, j.cfg.PublishWorktree,
+		"log", "-1", "--grep=\\[auto-publish\\]", "--format=%H%x1f%cI%x1f%s",
+	)
+	if err != nil {
+		// `git log` returns non-zero on bad refs but exit 0 with empty stdout
+		// on "no matching commits", so a real error here is genuine.
+		return nil, fmt.Errorf("git log: %w", err)
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return nil, nil
+	}
+	parts := strings.SplitN(out, "\x1f", 3)
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("unexpected git log output: %q", out)
+	}
+	branch, _ := gitOut(ctx, j.cfg.PublishWorktree, "rev-parse", "--abbrev-ref", "HEAD")
+	return &LastInfo{
+		CommitSHA:   parts[0],
+		CommittedAt: parts[1],
+		Subject:     parts[2],
+		Branch:      strings.TrimSpace(branch),
+	}, nil
+}
+
 // --- internals ---
 
 func preflight(worktree string) error {
@@ -270,6 +317,7 @@ func (j *Job) dumpAll(ctx context.Context, dir, stamp string) ([]string, error) 
 		filepath.Join(dir, "assets-"+stamp+".csv"),
 		filepath.Join(dir, "snapshots-"+stamp+".csv"),
 		filepath.Join(dir, "transactions-"+stamp+".csv"),
+		filepath.Join(dir, "bucket_targets-"+stamp+".csv"),
 		filepath.Join(dir, "holdings-"+stamp+".csv"),
 	}
 	if err := csvexport.DumpAssets(ctx, j.store, files[0]); err != nil {
@@ -281,7 +329,10 @@ func (j *Job) dumpAll(ctx context.Context, dir, stamp string) ([]string, error) 
 	if err := csvexport.DumpTransactions(ctx, j.store, files[2]); err != nil {
 		return files, fmt.Errorf("transactions: %w", err)
 	}
-	if err := csvexport.DumpHoldings(ctx, j.store, files[3]); err != nil {
+	if err := csvexport.DumpBucketTargets(ctx, j.store, files[3]); err != nil {
+		return files, fmt.Errorf("bucket_targets: %w", err)
+	}
+	if err := csvexport.DumpHoldings(ctx, j.store, files[4]); err != nil {
 		return files, fmt.Errorf("holdings: %w", err)
 	}
 	return files, nil

@@ -111,12 +111,18 @@ func main() {
 	}
 	stats.transactions = n
 
+	n, err = importBucketTargets(ctx, tx, filepath.Join(*fromDir, "bucket_targets-"+chosenDate+".csv"))
+	if err != nil {
+		log.Fatalf("import bucket_targets: %v", err)
+	}
+	stats.bucketTargets = n
+
 	if err := tx.Commit(); err != nil {
 		log.Fatalf("commit: %v", err)
 	}
 
-	fmt.Printf("import ok: assets=%d snapshots=%d transactions=%d (date=%s)\n",
-		stats.assets, stats.snapshots, stats.transactions, chosenDate)
+	fmt.Printf("import ok: assets=%d snapshots=%d transactions=%d bucket_targets=%d (date=%s)\n",
+		stats.assets, stats.snapshots, stats.transactions, stats.bucketTargets, chosenDate)
 
 	if *verify {
 		if err := roundTripVerify(ctx, conn, *fromDir, chosenDate); err != nil {
@@ -127,14 +133,15 @@ func main() {
 }
 
 type importStats struct {
-	assets       int
-	snapshots    int
-	transactions int
+	assets        int
+	snapshots     int
+	transactions  int
+	bucketTargets int
 }
 
 // ---- date resolution ----
 
-var datedRE = regexp.MustCompile(`^(?:assets|snapshots|transactions|holdings)-(\d{4}-\d{2}-\d{2})\.csv$`)
+var datedRE = regexp.MustCompile(`^(?:assets|snapshots|transactions|bucket_targets|holdings)-(\d{4}-\d{2}-\d{2})\.csv$`)
 
 func resolveDate(dir, requested string) (string, error) {
 	if requested != "" {
@@ -205,19 +212,22 @@ func guardNonEmpty(conn *sql.DB, force bool) error {
 	err := conn.QueryRow(`
 		SELECT (SELECT COUNT(*) FROM assets) +
 		       (SELECT COUNT(*) FROM snapshots) +
-		       (SELECT COUNT(*) FROM transactions)`).Scan(&n)
+		       (SELECT COUNT(*) FROM transactions) +
+		       (SELECT COUNT(*) FROM bucket_targets)`).Scan(&n)
 	if err != nil {
 		return fmt.Errorf("count rows: %w", err)
 	}
 	if n > 0 && !force {
-		return fmt.Errorf("destination DB is non-empty (assets+snapshots+transactions = %d rows); refusing to import. Re-run with -force to wipe and replace, or back up first", n)
+		return fmt.Errorf("destination DB is non-empty (assets+snapshots+transactions+bucket_targets = %d rows); refusing to import. Re-run with -force to wipe and replace, or back up first", n)
 	}
 	return nil
 }
 
 func truncateAll(ctx context.Context, tx *sql.Tx) error {
 	// Order matters: snapshots/transactions FK -> assets, so wipe leaves first.
+	// bucket_targets has no FKs so order is free.
 	stmts := []string{
+		`DELETE FROM bucket_targets`,
 		`DELETE FROM transactions`,
 		`DELETE FROM snapshots`,
 		`DELETE FROM assets`,
@@ -448,6 +458,52 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`)
 		}
 		if _, err := stmt.ExecContext(ctx, assetID, row[2], row[3], amt, fee, row[8], row[9]); err != nil {
 			return count, fmt.Errorf("row %d: %w", count+1, err)
+		}
+		count++
+	}
+	return count, nil
+}
+
+// bucket_targets header (must match csvexport.BucketTargetsHeader):
+//   bucket, target_pct, notes, updated_at
+//
+// Idempotent insert by primary key `bucket`. We deliberately use INSERT (not
+// UPSERT) here because cmd/import always runs after a TRUNCATE in the -force
+// path, or against a fresh DB — there cannot be a conflict.
+func importBucketTargets(ctx context.Context, tx *sql.Tx, path string) (int, error) {
+	r, f, err := openCSV(path, []string{"bucket", "target_pct", "notes", "updated_at"})
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			log.Printf("import: %s missing, skipping bucket_targets", path)
+			return 0, nil
+		}
+		return 0, err
+	}
+	defer f.Close()
+
+	stmt, err := tx.PrepareContext(ctx, `
+INSERT INTO bucket_targets (bucket, target_pct, notes, updated_at)
+VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
+
+	count := 0
+	for {
+		row, err := r.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return count, fmt.Errorf("row %d: %w", count+1, err)
+		}
+		pct, err := strconv.ParseFloat(row[1], 64)
+		if err != nil {
+			return count, fmt.Errorf("row %d target_pct %q: %w", count+1, row[1], err)
+		}
+		if _, err := stmt.ExecContext(ctx, row[0], pct, row[2], row[3]); err != nil {
+			return count, fmt.Errorf("row %d bucket=%q: %w", count+1, row[0], err)
 		}
 		count++
 	}

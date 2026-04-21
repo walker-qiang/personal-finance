@@ -24,6 +24,13 @@ type Asset struct {
 	ArchivedAt       sql.NullString  `json:"archived_at"`
 }
 
+type BucketTarget struct {
+	Bucket    string  `json:"bucket"`
+	TargetPct float64 `json:"target_pct"`
+	Notes     string  `json:"notes"`
+	UpdatedAt string  `json:"updated_at"`
+}
+
 type Holding struct {
 	AssetID          int64    `json:"asset_id"`
 	AssetCode        string   `json:"asset_code"`

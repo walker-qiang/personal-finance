@@ -766,3 +766,70 @@ func (s *Store) ListHoldings(ctx context.Context) ([]Holding, error) {
 	}
 	return out, nil
 }
+
+// --- BucketTarget ---
+
+// BucketTarget mirrors sqlcgen.BucketTarget; we keep our own struct so callers
+// don't import sqlcgen directly. There is no nullable field — every column is
+// NOT NULL in the schema.
+type BucketTarget struct {
+	Bucket    string
+	TargetPct float64
+	Notes     string
+	UpdatedAt string
+}
+
+func bucketTargetFromSQLC(b sqlcgen.BucketTarget) BucketTarget {
+	return BucketTarget{
+		Bucket:    b.Bucket,
+		TargetPct: b.TargetPct,
+		Notes:     b.Notes,
+		UpdatedAt: b.UpdatedAt,
+	}
+}
+
+func (s *Store) ListBucketTargets(ctx context.Context) ([]BucketTarget, error) {
+	rows, err := s.q.ListBucketTargets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]BucketTarget, len(rows))
+	for i, r := range rows {
+		out[i] = bucketTargetFromSQLC(r)
+	}
+	return out, nil
+}
+
+func (s *Store) GetBucketTarget(ctx context.Context, bucket string) (BucketTarget, error) {
+	row, err := s.q.GetBucketTarget(ctx, bucket)
+	if err != nil {
+		return BucketTarget{}, err
+	}
+	return bucketTargetFromSQLC(row), nil
+}
+
+func (s *Store) UpsertBucketTarget(ctx context.Context, b BucketTarget) (BucketTarget, error) {
+	row, err := s.q.UpsertBucketTarget(ctx, sqlcgen.UpsertBucketTargetParams{
+		Bucket:    b.Bucket,
+		TargetPct: b.TargetPct,
+		Notes:     b.Notes,
+	})
+	if err != nil {
+		return BucketTarget{}, err
+	}
+	return bucketTargetFromSQLC(row), nil
+}
+
+// DeleteBucketTarget removes the row for the given bucket. Returns
+// sql.ErrNoRows when there was nothing to delete (handler maps to 404 so the
+// UI distinguishes "cleared" from "wasn't there to begin with").
+func (s *Store) DeleteBucketTarget(ctx context.Context, bucket string) error {
+	n, err := s.q.DeleteBucketTarget(ctx, bucket)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
