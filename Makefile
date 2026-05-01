@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-GO    := /opt/homebrew/bin/go
+GO    := /usr/local/go/bin/go
 BIN   := $(CURDIR)/bin
 
 GOOSE := $(BIN)/goose
