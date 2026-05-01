@@ -8,6 +8,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no cgo)
 )
@@ -21,7 +22,9 @@ func Open(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %q: %w", path, err)
 	}
-	conn.SetMaxOpenConns(1) // SQLite serializes writes; keep things predictable.
+	conn.SetMaxOpenConns(4) // allow concurrent reads; WAL handles write serialization
+	conn.SetMaxIdleConns(2) // keep a few idle connections ready
+	conn.SetConnMaxLifetime(10 * time.Minute)
 	if err := conn.Ping(); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("ping sqlite %q: %w", path, err)
